@@ -110,7 +110,7 @@ func (w *p2cWriter) Start() {
 				p2cReqs = append(p2cReqs, req)
 				reqs[req.name] = p2cReqs
 			}
-
+			w.logger.With(writerContent...).Info("Recieved requests: ", len(reqs))
 			// ensure we have something to send..
 			nmetrics := len(reqs)
 			if nmetrics < 1 {
