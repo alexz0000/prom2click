@@ -136,7 +136,6 @@ func (w *p2cWriter) Start() {
 				}
 				// build statements
 				smt, err := tx.Prepare(sql)
-				defer smt.Close()
 				if err != nil {
 					w.logger.With(writerContent...).Errorf("prepare statement: %s", err.Error())
 					continue

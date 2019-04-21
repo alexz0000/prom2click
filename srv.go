@@ -62,6 +62,7 @@ func NewP2CServer(conf *config, sugar *zap.SugaredLogger) (*p2cServer, error) {
 
 	c.mux.HandleFunc(c.conf.HTTPWritePath, func(w http.ResponseWriter, r *http.Request) {
 		compressed, err := ioutil.ReadAll(r.Body)
+		defer r.Body.Close()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
