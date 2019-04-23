@@ -2,6 +2,8 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -9,6 +11,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
+
+var insertSQL = `INSERT INTO %s.%s
+	(date, name, tags, val, ts)
+	VALUES	(?, ?, ?, ?, ?)`
 
 var writerContent = []interface{}{"component", "writer"}
 
@@ -87,11 +93,12 @@ func (w *p2cWriter) Start() {
 	go func() {
 		w.wg.Add(1)
 		w.logger.With(writerContent...).Info("Writer starting..")
+		sql := fmt.Sprintf(insertSQL, w.conf.ChDB, w.conf.ChTable)
 		ok := true
 		for ok {
 			w.test.Add(1)
 			// get next batch of requests
-			reqs := make(map[string][]*p2cRequest)
+			var reqs []*p2cRequest
 
 			tstart := time.Now()
 			for i := 0; i < w.conf.ChBatch; i++ {
@@ -102,59 +109,53 @@ func (w *p2cWriter) Start() {
 					w.logger.With(writerContent...).Info("Writer stopping..")
 					break
 				}
-
-				p2cReqs, ok := reqs[req.name]
-				if !ok {
-					p2cReqs = []*p2cRequest{}
-				}
-				p2cReqs = append(p2cReqs, req)
-				reqs[req.name] = p2cReqs
+				reqs = append(reqs, req)
 			}
-			w.logger.With(writerContent...).Info("Recieved requests: ", len(reqs))
+
 			// ensure we have something to send..
 			nmetrics := len(reqs)
 			if nmetrics < 1 {
 				continue
 			}
 
-			for name, p2cReqs := range reqs {
-				tmp := p2cReqs[0]
-				if !w.hasTable(name) {
-					err := w.Create(tmp)
-					if err != nil {
-						continue
-					}
-				}
+			// post them to db all at once
+			tx, err := w.db.Begin()
+			if err != nil {
+				w.logger.With(writerContent...).Errorf("begin transaction: %s", err.Error())
+				w.ko.Add(1.0)
+				continue
+			}
 
-				sql := w.BuildInsertSql(tmp)
-				// post them to db all at once
-				tx, err := w.db.Begin()
-				if err != nil {
-					w.logger.With(writerContent...).Errorf("begin transaction: %s", err.Error())
-					w.ko.Add(1.0)
-					continue
-				}
-				// build statements
-				smt, err := tx.Prepare(sql)
+			// build statements
+			smt, err := tx.Prepare(sql)
+			for _, req := range reqs {
 				if err != nil {
 					w.logger.With(writerContent...).Errorf("prepare statement: %s", err.Error())
+					w.ko.Add(1.0)
 					continue
 				}
-				for _, req := range p2cReqs {
-					err = w.Insert(smt, req)
-					if err != nil {
-						w.logger.With(writerContent...).Errorf("InsertSql: %s", sql)
-					}
-				}
-				// commit and record metrics
-				if err = tx.Commit(); err != nil {
-					w.logger.With(writerContent...).Errorf("commit failed: %s", err.Error())
+
+				// ensure tags are inserted in the same order each time
+				// possibly/probably impacts indexing?
+				sort.Strings(req.tags)
+				_, err = smt.Exec(req.ts, req.name, clickhouse.Array(req.tags),
+					req.val, req.ts)
+
+				if err != nil {
+					w.logger.With(writerContent...).Errorf("statement exec: %s", err.Error())
 					w.ko.Add(1.0)
-				} else {
-					w.tx.Add(float64(nmetrics))
-					w.timings.Observe(float64(time.Since(tstart)))
 				}
 			}
+
+			// commit and record metrics
+			if err = tx.Commit(); err != nil {
+				w.logger.With(writerContent...).Errorf("commit failed: %s", err.Error())
+				w.ko.Add(1.0)
+			} else {
+				w.tx.Add(float64(nmetrics))
+				w.timings.Observe(float64(time.Since(tstart)))
+			}
+
 		}
 		w.logger.With(writerContent...).Info("Writer stopped..")
 		w.wg.Done()

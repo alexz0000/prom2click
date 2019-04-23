@@ -182,7 +182,7 @@ func (c *p2cServer) Shutdown() {
 	select {
 	case <-wchan:
 		c.logger.Info("Writer shutdown cleanly..")
-	// All done!
+		// All done!
 	case <-time.After(10 * time.Second):
 		c.logger.Info("Writer shutdown timed out, samples will be lost..")
 	}
