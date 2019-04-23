@@ -61,10 +61,6 @@ func main() {
 	if err != nil {
 		sugar.Fatalf("could not create server: %s\n", err.Error())
 	}
-	err = srv.writer.LoadTable()
-	if err != nil {
-		sugar.Fatalf("Load table info failed: %s\n", err.Error())
-	}
 	err = srv.Start()
 	if err != nil {
 		sugar.Fatalf("http server returned error: %s\n", err.Error())
